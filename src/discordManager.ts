@@ -239,6 +239,18 @@ function isMessageUrgent(content: string, isMentioned: boolean): boolean {
 }
 
 /**
+ * Checks for debug cheat codes in message content
+ * @param content - Message content to check
+ * @returns Object with debug flags
+ */
+function checkDebugCheats(content: string): { forceImage: boolean; instantResponse: boolean } {
+  return {
+    forceImage: content.includes("''"), // Double single quotes forces image
+    instantResponse: content.includes("`")  // Backtick forces instant response
+  };
+}
+
+/**
  * Gets the interaction key for tracking last interaction times
  * @param channelId - Channel ID
  * @param userId - User ID
@@ -275,14 +287,22 @@ function updateLastInteractionTime(channelId: string, userId: string, botId: str
  * Checks if a Reddit image should be attached based on message count
  * @param channelId - The channel ID
  * @param botConfig - The bot configuration
+ * @param forceImage - Debug cheat to force image attachment
  * @returns Whether to attach an image
  */
 function shouldAttachRedditImage(
   channelId: string,
-  botConfig: BotConfig
+  botConfig: BotConfig,
+  forceImage: boolean = false
 ): boolean {
   if (!botConfig.redditConfig || botConfig.redditConfig.subreddits.length === 0) {
     return false;
+  }
+  
+  // Debug cheat: force image if double quotes detected
+  if (forceImage) {
+    console.log(`[Bot ${botConfig.id}] Debug cheat activated - forcing Reddit image attachment`);
+    return true;
   }
 
   const now = Date.now();
@@ -465,6 +485,9 @@ async function createDiscordClientForBot(
     let typingTimeout: NodeJS.Timeout | null = null;
     
     try {
+      // Check for debug cheat codes
+      const debugCheats = checkDebugCheats(message.content);
+      
       // Calculate realistic response timing
       const interactionKey = getInteractionKey(message.channel.id, message.author.id, botConfig.id);
       const lastInteractionTime = lastInteractionTimes.get(interactionKey);
@@ -473,10 +496,14 @@ async function createDiscordClientForBot(
       const timeSinceLastMs = lastInteractionTime ? Date.now() - lastInteractionTime : 30000; // Default to 30 seconds for first interaction
       const isUrgent = isMessageUrgent(message.content, isMentioned);
       
-      const responseDelayMs = calculateRealisticDelay(timeSinceLastMs, false, isUrgent);
-      const typingDelayMs = calculateTypingDelay(responseDelayMs);
+      const responseDelayMs = debugCheats.instantResponse ? 1000 : calculateRealisticDelay(timeSinceLastMs, false, isUrgent);
+      const typingDelayMs = debugCheats.instantResponse ? 200 : calculateTypingDelay(responseDelayMs);
       
-      console.log(`[Bot ${botConfig.id}] Realistic timing - delay: ${Math.round(responseDelayMs/1000)}s, typing in: ${Math.round(typingDelayMs/1000)}s (last interaction: ${Math.round(timeSinceLastMs/60000)}min ago)`);
+      if (debugCheats.instantResponse) {
+        console.log(`[Bot ${botConfig.id}] Debug cheat activated - instant response (1s delay)`);
+      } else {
+        console.log(`[Bot ${botConfig.id}] Realistic timing - delay: ${Math.round(responseDelayMs/1000)}s, typing in: ${Math.round(typingDelayMs/1000)}s (last interaction: ${Math.round(timeSinceLastMs/60000)}min ago)`);
+      }
       
       // Emergency bypass for excessive delays (should not happen with new limits, but safety check)
       if (responseDelayMs > 30000) { // More than 30 seconds
@@ -540,7 +567,7 @@ async function createDiscordClientForBot(
       }
 
       // Check if we should attach a Reddit image
-      const shouldAttachImage = shouldAttachRedditImage(message.channel.id, botConfig);
+      const shouldAttachImage = shouldAttachRedditImage(message.channel.id, botConfig, debugCheats.forceImage);
       let imageAttachment: AttachmentBuilder | null = null;
 
       if (shouldAttachImage && botConfig.redditConfig) {
@@ -657,6 +684,9 @@ async function handleDirectMessage(
   let typingTimeout: NodeJS.Timeout | null = null;
   
   try {
+    // Check for debug cheat codes
+    const debugCheats = checkDebugCheats(message.content);
+    
     // Calculate realistic response timing for DM
     const interactionKey = getInteractionKey(message.channel.id, message.author.id, botConfig.id);
     const lastInteractionTime = lastInteractionTimes.get(interactionKey);
@@ -665,10 +695,14 @@ async function handleDirectMessage(
     const timeSinceLastMs = lastInteractionTime ? Date.now() - lastInteractionTime : 30000; // Default to 30 seconds for first interaction
     const isUrgent = isMessageUrgent(message.content, true); // DMs are generally urgent
     
-    const responseDelayMs = calculateRealisticDelay(timeSinceLastMs, true, isUrgent);
-    const typingDelayMs = calculateTypingDelay(responseDelayMs);
+    const responseDelayMs = debugCheats.instantResponse ? 1000 : calculateRealisticDelay(timeSinceLastMs, true, isUrgent);
+    const typingDelayMs = debugCheats.instantResponse ? 200 : calculateTypingDelay(responseDelayMs);
     
-    console.log(`[Bot ${botConfig.id}] DM timing - delay: ${Math.round(responseDelayMs/1000)}s, typing in: ${Math.round(typingDelayMs/1000)}s (last interaction: ${Math.round(timeSinceLastMs/60000)}min ago)`);
+    if (debugCheats.instantResponse) {
+      console.log(`[Bot ${botConfig.id}] Debug cheat activated - instant DM response (1s delay)`);
+    } else {
+      console.log(`[Bot ${botConfig.id}] DM timing - delay: ${Math.round(responseDelayMs/1000)}s, typing in: ${Math.round(typingDelayMs/1000)}s (last interaction: ${Math.round(timeSinceLastMs/60000)}min ago)`);
+    }
     
     // Emergency bypass for excessive delays (should not happen with new limits, but safety check)
     if (responseDelayMs > 30000) { // More than 30 seconds
@@ -727,7 +761,7 @@ async function handleDirectMessage(
       }
 
       // Check if we should attach a Reddit image
-      const shouldAttachImage = shouldAttachRedditImage(message.channel.id, botConfig);
+      const shouldAttachImage = shouldAttachRedditImage(message.channel.id, botConfig, debugCheats.forceImage);
       let imageAttachment: AttachmentBuilder | null = null;
 
       if (shouldAttachImage && botConfig.redditConfig) {

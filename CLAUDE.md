@@ -94,6 +94,11 @@ The heart of the Discord integration, managing:
 - Adds randomization for natural conversation feel
 - Auto-cleanup of old interaction data after 24 hours
 
+**Debug Cheat Codes**:
+- Include `''` (double single quotes) anywhere in message to force Reddit image attachment
+- Include `` ` `` (backtick) anywhere in message to trigger instant response (1s delay)
+- Both cheats work in DMs and server channels, useful for testing timing and image systems
+
 **Permission Handling**:
 - Checks ViewChannel, SendMessages, ReadMessageHistory permissions
 - Additional SendMessagesInThreads check for thread channels
@@ -296,3 +301,18 @@ REDDIT_NSFW_1=true|false                # Allow NSFW Reddit content
 2. Check BOT_TOKEN/SHARED_AI_CODE pairing
 3. Verify KINDROID_API_KEY validity
 4. Ensure proper number sequencing (1, 2, 3...)
+
+### Debug Cheat Codes for Testing
+1. **Force Reddit Image**: Include `''` (double single quotes) anywhere in your message
+   - Bot will 100% attach a Reddit image regardless of message count
+   - Works even if no Reddit subreddits configured (will log attempt)
+   - Useful for testing image download and attachment functionality
+
+2. **Instant Response**: Include `` ` `` (backtick) anywhere in your message  
+   - Bot will respond in ~1 second instead of realistic human timing
+   - Typing indicator appears after 200ms
+   - Useful for rapid testing without waiting for delays
+
+3. **Combined Cheats**: Use both `''` and `` ` `` in same message for instant image response
+   - Example: "Hello '' can you help me `?"
+   - Bot responds instantly with forced Reddit image attachment
