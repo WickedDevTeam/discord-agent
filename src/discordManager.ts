@@ -28,6 +28,8 @@ import {
   MIN_RESPONSE_DELAY_MS,
   TYPING_INDICATOR_MIN_PERCENTAGE,
   TYPING_INDICATOR_MAX_PERCENTAGE,
+  DEVELOPMENT_MODE,
+  DEVELOPMENT_MAX_DELAY_MS,
 } from "./constants";
 
 //Bot back and forth (prevent infinite loop but allow for mentioning other bots in conversation)
@@ -199,7 +201,8 @@ function calculateRealisticDelay(
   const delayMs = randomDelay * 1000; // Convert to milliseconds
   
   // Apply hard limits to prevent excessive delays
-  return Math.min(Math.max(delayMs, MIN_RESPONSE_DELAY_MS), MAX_RESPONSE_DELAY_MS);
+  const hardMaxDelay = DEVELOPMENT_MODE ? DEVELOPMENT_MAX_DELAY_MS : MAX_RESPONSE_DELAY_MS;
+  return Math.min(Math.max(delayMs, MIN_RESPONSE_DELAY_MS), hardMaxDelay);
 }
 
 /**
@@ -464,8 +467,10 @@ async function createDiscordClientForBot(
     try {
       // Calculate realistic response timing
       const interactionKey = getInteractionKey(message.channel.id, message.author.id, botConfig.id);
-      const lastInteractionTime = lastInteractionTimes.get(interactionKey) || 0;
-      const timeSinceLastMs = Date.now() - lastInteractionTime;
+      const lastInteractionTime = lastInteractionTimes.get(interactionKey);
+      
+      // If no previous interaction, treat as first-time interaction (short delay)
+      const timeSinceLastMs = lastInteractionTime ? Date.now() - lastInteractionTime : 30000; // Default to 30 seconds for first interaction
       const isUrgent = isMessageUrgent(message.content, isMentioned);
       
       const responseDelayMs = calculateRealisticDelay(timeSinceLastMs, false, isUrgent);
@@ -473,23 +478,41 @@ async function createDiscordClientForBot(
       
       console.log(`[Bot ${botConfig.id}] Realistic timing - delay: ${Math.round(responseDelayMs/1000)}s, typing in: ${Math.round(typingDelayMs/1000)}s (last interaction: ${Math.round(timeSinceLastMs/60000)}min ago)`);
       
-      // Schedule typing indicator to show partway through delay
-      typingTimeout = setTimeout(async () => {
-        try {
-          if (
-            message.channel instanceof BaseGuildTextChannel ||
-            message.channel instanceof DMChannel
-          ) {
-            await message.channel.sendTyping();
-          }
-        } catch (typingError) {
-          // Silently handle typing errors (channel might be unavailable)
-          console.warn(`[Bot ${botConfig.id}] Typing indicator failed:`, typingError);
+      // Emergency bypass for excessive delays (should not happen with new limits, but safety check)
+      if (responseDelayMs > 30000) { // More than 30 seconds
+        console.warn(`[Bot ${botConfig.id}] Warning: Delay ${Math.round(responseDelayMs/1000)}s exceeds 30s, reducing to 10s for responsiveness`);
+        const safeDelayMs = 10000; // 10 seconds
+        const safeTypingDelayMs = calculateTypingDelay(safeDelayMs);
+        
+        // Use the safe delays instead
+        await new Promise(resolve => setTimeout(resolve, safeTypingDelayMs));
+        if (
+          message.channel instanceof BaseGuildTextChannel ||
+          message.channel instanceof DMChannel
+        ) {
+          await message.channel.sendTyping();
         }
-      }, typingDelayMs);
-      
-      // Wait for the calculated response delay
-      await new Promise(resolve => setTimeout(resolve, responseDelayMs));
+        await new Promise(resolve => setTimeout(resolve, safeDelayMs - safeTypingDelayMs));
+      } else {
+        // Normal timing flow
+        // Schedule typing indicator to show partway through delay
+        typingTimeout = setTimeout(async () => {
+          try {
+            if (
+              message.channel instanceof BaseGuildTextChannel ||
+              message.channel instanceof DMChannel
+            ) {
+              await message.channel.sendTyping();
+            }
+          } catch (typingError) {
+            // Silently handle typing errors (channel might be unavailable)
+            console.warn(`[Bot ${botConfig.id}] Typing indicator failed:`, typingError);
+          }
+        }, typingDelayMs);
+        
+        // Wait for the calculated response delay
+        await new Promise(resolve => setTimeout(resolve, responseDelayMs));
+      }
       
       // Clear the typing timeout (in case the delay was shorter than expected)
       if (typingTimeout) {
@@ -636,8 +659,10 @@ async function handleDirectMessage(
   try {
     // Calculate realistic response timing for DM
     const interactionKey = getInteractionKey(message.channel.id, message.author.id, botConfig.id);
-    const lastInteractionTime = lastInteractionTimes.get(interactionKey) || 0;
-    const timeSinceLastMs = Date.now() - lastInteractionTime;
+    const lastInteractionTime = lastInteractionTimes.get(interactionKey);
+    
+    // If no previous interaction, treat as first-time interaction (short delay)
+    const timeSinceLastMs = lastInteractionTime ? Date.now() - lastInteractionTime : 30000; // Default to 30 seconds for first interaction
     const isUrgent = isMessageUrgent(message.content, true); // DMs are generally urgent
     
     const responseDelayMs = calculateRealisticDelay(timeSinceLastMs, true, isUrgent);
@@ -645,20 +670,35 @@ async function handleDirectMessage(
     
     console.log(`[Bot ${botConfig.id}] DM timing - delay: ${Math.round(responseDelayMs/1000)}s, typing in: ${Math.round(typingDelayMs/1000)}s (last interaction: ${Math.round(timeSinceLastMs/60000)}min ago)`);
     
-    // Schedule typing indicator to show partway through delay
-    typingTimeout = setTimeout(async () => {
-      try {
-        if (message.channel instanceof DMChannel) {
-          await message.channel.sendTyping();
-        }
-      } catch (typingError) {
-        // Silently handle typing errors (channel might be unavailable)
-        console.warn(`[Bot ${botConfig.id}] DM typing indicator failed:`, typingError);
+    // Emergency bypass for excessive delays (should not happen with new limits, but safety check)
+    if (responseDelayMs > 30000) { // More than 30 seconds
+      console.warn(`[Bot ${botConfig.id}] Warning: DM delay ${Math.round(responseDelayMs/1000)}s exceeds 30s, reducing to 10s for responsiveness`);
+      const safeDelayMs = 10000; // 10 seconds
+      const safeTypingDelayMs = calculateTypingDelay(safeDelayMs);
+      
+      // Use the safe delays instead
+      await new Promise(resolve => setTimeout(resolve, safeTypingDelayMs));
+      if (message.channel instanceof DMChannel) {
+        await message.channel.sendTyping();
       }
-    }, typingDelayMs);
-    
-    // Wait for the calculated response delay
-    await new Promise(resolve => setTimeout(resolve, responseDelayMs));
+      await new Promise(resolve => setTimeout(resolve, safeDelayMs - safeTypingDelayMs));
+    } else {
+      // Normal timing flow
+      // Schedule typing indicator to show partway through delay
+      typingTimeout = setTimeout(async () => {
+        try {
+          if (message.channel instanceof DMChannel) {
+            await message.channel.sendTyping();
+          }
+        } catch (typingError) {
+          // Silently handle typing errors (channel might be unavailable)
+          console.warn(`[Bot ${botConfig.id}] DM typing indicator failed:`, typingError);
+        }
+      }, typingDelayMs);
+      
+      // Wait for the calculated response delay
+      await new Promise(resolve => setTimeout(resolve, responseDelayMs));
+    }
     
     // Clear the typing timeout (in case the delay was shorter than expected)
     if (typingTimeout) {

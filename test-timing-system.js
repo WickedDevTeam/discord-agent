@@ -10,8 +10,10 @@ const path = require('path');
 
 // Since the timing functions are not exported, we'll read and evaluate them
 // This is a simplified version of the timing logic for testing
-const MAX_RESPONSE_DELAY_MS = 15 * 60 * 1000; // 15 minutes
+const MAX_RESPONSE_DELAY_MS = 2 * 60 * 1000; // 2 minutes (updated)
 const MIN_RESPONSE_DELAY_MS = 2000; // 2 seconds
+const DEVELOPMENT_MAX_DELAY_MS = 10000; // 10 seconds in dev mode
+const DEVELOPMENT_MODE = process.env.DEVELOPMENT_MODE === 'true';
 
 function calculateRealisticDelay(timeSinceLastMs, isDM = false, isUrgent = false) {
   // Handle edge cases
@@ -47,7 +49,8 @@ function calculateRealisticDelay(timeSinceLastMs, isDM = false, isUrgent = false
   const delayMs = randomDelay * 1000;
   
   // Apply hard limits to prevent excessive delays
-  return Math.min(Math.max(delayMs, MIN_RESPONSE_DELAY_MS), MAX_RESPONSE_DELAY_MS);
+  const hardMaxDelay = DEVELOPMENT_MODE ? DEVELOPMENT_MAX_DELAY_MS : MAX_RESPONSE_DELAY_MS;
+  return Math.min(Math.max(delayMs, MIN_RESPONSE_DELAY_MS), hardMaxDelay);
 }
 
 function calculateTypingDelay(totalDelayMs) {
@@ -135,7 +138,7 @@ async function testTimingSystem() {
       timeSinceLastMs: 10 * 60 * 60 * 1000, // 10 hours
       isDM: false,
       isUrgent: false,
-      expected: 'Should be capped at 15 minutes max'
+      expected: 'Should be capped at 2 minutes max'
     },
     {
       name: 'Edge case: zero time',
@@ -197,21 +200,22 @@ async function testTimingSystem() {
     console.log(`   ${status} "${test.content}" (mentioned: ${test.mentioned}) -> urgent: ${isUrgent}`);
   }
 
-  // Test the 15-minute cap specifically
-  console.log('\\n⏰ Testing 15-minute cap:');
+  // Test the 2-minute cap specifically
+  console.log('\\n⏰ Testing 2-minute cap:');
   let exceedsMax = false;
+  const maxAllowed = DEVELOPMENT_MODE ? DEVELOPMENT_MAX_DELAY_MS : MAX_RESPONSE_DELAY_MS;
   for (let i = 0; i < 50; i++) {
     const veryLongDelay = calculateRealisticDelay(24 * 60 * 60 * 1000, false, false); // 24 hours
-    if (veryLongDelay > MAX_RESPONSE_DELAY_MS) {
+    if (veryLongDelay > maxAllowed) {
       exceedsMax = true;
       break;
     }
   }
   
   if (exceedsMax) {
-    console.log('   ❌ Some delays exceed 15-minute cap');
+    console.log(`   ❌ Some delays exceed ${Math.round(maxAllowed/60000)}-minute cap`);
   } else {
-    console.log('   ✅ All delays properly capped at 15 minutes');
+    console.log(`   ✅ All delays properly capped at ${Math.round(maxAllowed/60000)} minutes`);
   }
 
   // Test the 2-second minimum
@@ -238,7 +242,7 @@ async function testTimingSystem() {
   console.log('   - Urgency detection and faster responses');
   console.log('   - Typing indicator timing (20-60% through delay)');
   console.log('   - Randomization for natural feel');
-  console.log('   - Hard limits (2s min, 15min max)');
+  console.log('   - Hard limits (2s min, 2min max, 10s in dev mode)');
   console.log('   - Edge case handling (negative time, zero time)');
 }
 

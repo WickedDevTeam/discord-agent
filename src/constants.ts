@@ -31,7 +31,11 @@ export const REDDIT_IMAGE_DOWNLOAD_TIMEOUT_MS = 10000; // 10 seconds timeout for
 // Response timing constants
 export const INTERACTION_TRACKING_CLEANUP_THRESHOLD = 1000; // Clean up when map exceeds this size
 export const INTERACTION_TRACKING_RETENTION_MS = 24 * 60 * 60 * 1000; // Keep data for 24 hours
-export const MAX_RESPONSE_DELAY_MS = 15 * 60 * 1000; // Cap delays at 15 minutes
+export const MAX_RESPONSE_DELAY_MS = 2 * 60 * 1000; // Cap delays at 2 minutes for responsiveness
 export const MIN_RESPONSE_DELAY_MS = 2000; // Minimum 2 second delay
 export const TYPING_INDICATOR_MIN_PERCENTAGE = 0.2; // Show typing at least 20% through delay
 export const TYPING_INDICATOR_MAX_PERCENTAGE = 0.6; // Show typing at most 60% through delay
+
+// Development mode - set to true for faster responses during testing
+export const DEVELOPMENT_MODE = process.env.DEVELOPMENT_MODE === 'true';
+export const DEVELOPMENT_MAX_DELAY_MS = 10000; // 10 seconds max in dev mode
