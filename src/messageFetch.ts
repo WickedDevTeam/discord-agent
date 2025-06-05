@@ -95,7 +95,7 @@ async function getUserDisplayName(msg: Message): Promise<string> {
  */
 async function fetchConversationFromDiscord(
   channel: TextChannel | DMChannel,
-  limit: number = 30
+  limit: number = 50
 ): Promise<ConversationMessage[]> {
   try {
     // Fetch messages from Discord
