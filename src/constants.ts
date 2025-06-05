@@ -22,4 +22,8 @@ export const BOT_CHAIN_INACTIVITY_RESET_MS = 600_000; // 10 minutes
 
 // Reddit Image Cache
 export const RECENTLY_SENT_IMAGE_CACHE_SIZE = 30; // Remember the last 30 image IDs per channel
-export const MAX_UNIQUE_IMAGE_FETCH_ATTEMPTS = 5; // Max attempts to find a new (non-cached) image 
+export const MAX_UNIQUE_IMAGE_FETCH_ATTEMPTS = 5; // Max attempts to find a new (non-cached) image
+
+// Discord file upload limits
+export const DISCORD_MAX_FILE_SIZE = 8 * 1024 * 1024; // 8MB for normal servers
+export const REDDIT_IMAGE_DOWNLOAD_TIMEOUT_MS = 10000; // 10 seconds timeout for downloading images 

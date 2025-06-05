@@ -8,16 +8,14 @@ import {
   BaseGuildTextChannel,
   PermissionFlagsBits,
   Partials,
-  EmbedBuilder,
   MessageCreateOptions,
+  AttachmentBuilder,
 } from "discord.js";
 import { ephemeralFetchConversation } from "./messageFetch";
 import { callKindroidAI } from "./kindroidAPI";
-import { BotConfig, DMConversationCount, ChannelMessageTracker } from "./types";
+import { BotConfig, DMConversationCount, ChannelMessageTracker, RedditImageData } from "./types";
 import { getRandomRedditImage, validateSubreddits } from "./redditAPI";
 import {
-  DISCORD_EMBED_TITLE_MAX_LENGTH,
-  DISCORD_EMBED_COLOR_REDDIT,
   CHANNEL_CACHE_DURATION_MS,
   DM_FETCH_LIMIT,
   MAX_BOT_CHAIN,
@@ -88,6 +86,17 @@ function shouldAllowBotMessage(message: Message): boolean {
 
   // Otherwise store updated data & allow
   botToBotChains.set(channelId, chainData);
+  
+  // Clean up old entries periodically to prevent unbounded growth
+  if (botToBotChains.size > 1000) {
+    const oldestAllowed = now - BOT_CHAIN_INACTIVITY_RESET_MS * 2; // Keep entries for 2x inactivity period
+    for (const [key, value] of botToBotChains.entries()) {
+      if (value.lastActivity < oldestAllowed) {
+        botToBotChains.delete(key);
+      }
+    }
+  }
+  
   return true;
 }
 
@@ -142,6 +151,7 @@ function shouldAttachRedditImage(
     return false;
   }
 
+  const now = Date.now();
   const tracker = channelMessageTrackers.get(channelId);
   if (!tracker) {
     // Initialize tracker for new channel
@@ -154,6 +164,19 @@ function shouldAttachRedditImage(
       targetMessageCount: targetCount,
       lastImageTime: 0,
     });
+    
+    // Clean up old channel trackers periodically
+    if (channelMessageTrackers.size > 1000) {
+      const oldestAllowed = now - 30 * 24 * 60 * 60 * 1000; // Keep data for 30 days
+      for (const [key, value] of channelMessageTrackers.entries()) {
+        if (value.lastImageTime > 0 && value.lastImageTime < oldestAllowed) {
+          channelMessageTrackers.delete(key);
+          // Also clean up the corresponding image cache
+          recentlySentRedditImagesByChannel.delete(key);
+        }
+      }
+    }
+    
     return false;
   }
 
@@ -168,7 +191,7 @@ function shouldAttachRedditImage(
       Math.random() * (botConfig.redditConfig.maxMessages - botConfig.redditConfig.minMessages + 1) +
       botConfig.redditConfig.minMessages
     );
-    tracker.lastImageTime = Date.now();
+    tracker.lastImageTime = now;
     return true;
   }
 
@@ -179,12 +202,12 @@ function shouldAttachRedditImage(
  * Fetches a random Reddit image that hasn't been recently sent in the channel.
  * @param botConfig Configuration for this bot instance
  * @param channelId The ID of the channel where the image will be sent
- * @returns An image object or null if no suitable image is found.
+ * @returns An image data object or null if no suitable image is found.
  */
 async function getUnseenRandomRedditImage(
   botConfig: BotConfig,
   channelId: string
-): Promise<{ id: string; url: string; title: string; subreddit: string } | null> {
+): Promise<RedditImageData | null> {
   if (!botConfig.redditConfig || botConfig.redditConfig.subreddits.length === 0) {
     return null; // No Reddit config or no subreddits
   }
@@ -335,21 +358,19 @@ async function createDiscordClientForBot(
 
       // Check if we should attach a Reddit image
       const shouldAttachImage = shouldAttachRedditImage(message.channel.id, botConfig);
-      let imageEmbed: EmbedBuilder | null = null;
+      let imageAttachment: AttachmentBuilder | null = null;
 
       if (shouldAttachImage && botConfig.redditConfig) {
         console.log(`[Bot ${botConfig.id}] Fetching Reddit image...`);
         const redditImage = await getUnseenRandomRedditImage(botConfig, message.channel.id);
         
         if (redditImage) {
-          // Create an embed with the image
-          imageEmbed = new EmbedBuilder()
-            .setTitle(redditImage.title.length > DISCORD_EMBED_TITLE_MAX_LENGTH ? 
-              redditImage.title.substring(0, DISCORD_EMBED_TITLE_MAX_LENGTH - 3) + "..." : 
-              redditImage.title)
-            .setImage(redditImage.url)
-            .setFooter({ text: `r/${redditImage.subreddit}` })
-            .setColor(DISCORD_EMBED_COLOR_REDDIT);
+          // Create an attachment from the image buffer
+          imageAttachment = new AttachmentBuilder(redditImage.buffer, {
+            name: redditImage.filename,
+            description: `${redditImage.title} • r/${redditImage.subreddit}`,
+          });
+          console.log(`[Bot ${botConfig.id}] Prepared image attachment: ${redditImage.filename}`);
         }
       }
 
@@ -358,8 +379,8 @@ async function createDiscordClientForBot(
         content: aiResult.reply,
       };
 
-      if (imageEmbed) {
-        messageOptions.embeds = [imageEmbed];
+      if (imageAttachment) {
+        messageOptions.files = [imageAttachment];
       }
 
       // If it was a mention, reply to the message. Otherwise, send as normal message
@@ -421,11 +442,22 @@ async function handleDirectMessage(
     lastMessageTime: 0,
   };
   const newCount = currentData.count + 1;
+  const now = Date.now();
 
   dmConversationCounts.set(dmKey, {
     count: newCount,
-    lastMessageTime: Date.now(),
+    lastMessageTime: now,
   });
+
+  // Clean up old DM conversation data periodically
+  if (dmConversationCounts.size > 1000) {
+    const oldestAllowed = now - 7 * 24 * 60 * 60 * 1000; // Keep data for 7 days
+    for (const [key, value] of dmConversationCounts.entries()) {
+      if (value.lastMessageTime < oldestAllowed) {
+        dmConversationCounts.delete(key);
+      }
+    }
+  }
 
   try {
     // Show typing indicator
@@ -453,21 +485,19 @@ async function handleDirectMessage(
 
       // Check if we should attach a Reddit image
       const shouldAttachImage = shouldAttachRedditImage(message.channel.id, botConfig);
-      let imageEmbed: EmbedBuilder | null = null;
+      let imageAttachment: AttachmentBuilder | null = null;
 
       if (shouldAttachImage && botConfig.redditConfig) {
         console.log(`[Bot ${botConfig.id}] Fetching Reddit image for DM...`);
         const redditImage = await getUnseenRandomRedditImage(botConfig, message.channel.id);
         
         if (redditImage) {
-          // Create an embed with the image
-          imageEmbed = new EmbedBuilder()
-            .setTitle(redditImage.title.length > DISCORD_EMBED_TITLE_MAX_LENGTH ? 
-              redditImage.title.substring(0, DISCORD_EMBED_TITLE_MAX_LENGTH - 3) + "..." : 
-              redditImage.title)
-            .setImage(redditImage.url)
-            .setFooter({ text: `r/${redditImage.subreddit}` })
-            .setColor(DISCORD_EMBED_COLOR_REDDIT);
+          // Create an attachment from the image buffer
+          imageAttachment = new AttachmentBuilder(redditImage.buffer, {
+            name: redditImage.filename,
+            description: `${redditImage.title} • r/${redditImage.subreddit}`,
+          });
+          console.log(`[Bot ${botConfig.id}] Prepared DM image attachment: ${redditImage.filename}`);
         }
       }
 
@@ -476,8 +506,8 @@ async function handleDirectMessage(
         content: aiResult.reply,
       };
 
-      if (imageEmbed) {
-        messageOptions.embeds = [imageEmbed];
+      if (imageAttachment) {
+        messageOptions.files = [imageAttachment];
       }
 
       // Send the AI's reply
@@ -539,6 +569,7 @@ async function shutdownAllBots(): Promise<void> {
   dmConversationCounts.clear();
   channelMessageTrackers.clear();
   recentlySentRedditImagesByChannel.clear();
+  botToBotChains.clear();
 }
 
 export { initializeAllBots, shutdownAllBots };

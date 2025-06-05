@@ -1,12 +1,14 @@
 import axios, { AxiosError } from "axios";
-import { RedditListing, RedditPost, RedditImageConfig } from "./types";
+import { RedditListing, RedditPost, RedditImageConfig, RedditImageData } from "./types";
 import { 
   REDDIT_USER_AGENT, 
   REDDIT_API_RATE_LIMIT_MS, 
   REDDIT_FETCH_LIMIT,
   REDDIT_MAX_RETRIES,
   REDDIT_RETRY_DELAY_MS,
-  IMAGE_EXTENSIONS 
+  IMAGE_EXTENSIONS,
+  DISCORD_MAX_FILE_SIZE,
+  REDDIT_IMAGE_DOWNLOAD_TIMEOUT_MS
 } from "./constants";
 
 // Rate limiting: track last request time
@@ -237,13 +239,94 @@ function getImageUrlFromPost(post: RedditPost): string | null {
 }
 
 /**
+ * Downloads an image from a URL and returns it as a buffer
+ * @param url - The image URL to download
+ * @param postId - The Reddit post ID for logging
+ * @returns Buffer containing the image data, or null if download fails
+ */
+async function downloadImage(url: string, postId: string): Promise<Buffer | null> {
+  try {
+    const response = await axios.get(url, {
+      responseType: 'arraybuffer',
+      timeout: REDDIT_IMAGE_DOWNLOAD_TIMEOUT_MS,
+      headers: {
+        'User-Agent': REDDIT_USER_AGENT,
+      },
+      maxContentLength: DISCORD_MAX_FILE_SIZE,
+      maxBodyLength: DISCORD_MAX_FILE_SIZE,
+    });
+
+    // Check content type to ensure it's an image
+    const contentType = response.headers['content-type'];
+    if (!contentType || !contentType.startsWith('image/')) {
+      console.warn(`Non-image content type for post ${postId}: ${contentType}`);
+      return null;
+    }
+
+    // Check file size
+    const buffer = Buffer.from(response.data);
+    if (buffer.length > DISCORD_MAX_FILE_SIZE) {
+      console.warn(`Image from post ${postId} exceeds Discord file size limit: ${buffer.length} bytes`);
+      return null;
+    }
+
+    return buffer;
+  } catch (error) {
+    if (axios.isAxiosError(error)) {
+      if (error.code === 'ECONNABORTED') {
+        console.error(`Image download timeout for post ${postId}`);
+      } else if (error.response) {
+        console.error(`Image download failed for post ${postId}: ${error.response.status}`);
+      } else {
+        console.error(`Image download error for post ${postId}:`, error.message);
+      }
+    } else {
+      console.error(`Unexpected error downloading image for post ${postId}:`, error);
+    }
+    return null;
+  }
+}
+
+/**
+ * Gets the file extension from a URL or content type
+ * @param url - The image URL
+ * @param contentType - Optional content type header
+ * @returns File extension with dot (e.g., '.jpg')
+ */
+function getImageExtension(url: string, contentType?: string): string {
+  // Try to get extension from URL first
+  const urlLower = url.toLowerCase();
+  for (const ext of IMAGE_EXTENSIONS) {
+    if (urlLower.includes(ext)) {
+      return ext;
+    }
+  }
+
+  // Fallback to content type
+  if (contentType) {
+    const typeMap: { [key: string]: string } = {
+      'image/jpeg': '.jpg',
+      'image/jpg': '.jpg',
+      'image/png': '.png',
+      'image/gif': '.gif',
+      'image/webp': '.webp',
+    };
+    const cleanType = contentType.split(';')[0].trim().toLowerCase();
+    return typeMap[cleanType] || '.jpg';
+  }
+
+  // Default to .jpg
+  return '.jpg';
+}
+
+/**
  * Fetches a random image from the configured subreddits
  * @param config - Reddit image configuration
- * @returns Object with image URL and post title, or null if no images found
+ * @returns Object with image data and metadata, or null if no images found
  */
 export async function getRandomRedditImage(
   config: RedditImageConfig
-): Promise<{ id: string; url: string; title: string; subreddit: string } | null> {
+): Promise<RedditImageData | null> {
   if (!config.subreddits || config.subreddits.length === 0) {
     console.warn("No subreddits configured for Reddit images");
     return null;
@@ -292,12 +375,24 @@ export async function getRandomRedditImage(
         const imageUrl = getImageUrlFromPost(post);
         
         if (imageUrl) {
-          return {
-            id: post.data.id,
-            url: imageUrl,
-            title: post.data.title,
-            subreddit: randomSubreddit,
-          };
+          // Download the image
+          const buffer = await downloadImage(imageUrl, post.data.id);
+          
+          if (buffer) {
+            // Generate filename with subreddit and post ID
+            const extension = getImageExtension(imageUrl);
+            const filename = `r-${randomSubreddit}_${post.data.id}${extension}`;
+            
+            return {
+              id: post.data.id,
+              buffer,
+              filename,
+              title: post.data.title,
+              subreddit: randomSubreddit,
+            };
+          } else {
+            console.log(`Failed to download image for post ${post.data.id}, trying next...`);
+          }
         }
       }
       

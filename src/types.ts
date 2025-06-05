@@ -81,3 +81,11 @@ export interface ChannelMessageTracker {
   targetMessageCount: number;
   lastImageTime: number;
 }
+
+export interface RedditImageData {
+  id: string;
+  buffer: Buffer;
+  filename: string;
+  title: string;
+  subreddit: string;
+}
