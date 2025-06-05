@@ -1,10 +1,28 @@
-export interface BotConfig {
+export type AccountType = 'bot' | 'user';
+
+export interface BaseAccountConfig {
   id: string;
-  discordBotToken: string;
+  accountType: AccountType;
+  token: string;
   sharedAiCode: string;
   enableFilter: boolean;
   redditConfig?: RedditImageConfig;
+  interactionRate?: number; // 1-100: How likely to respond autonomously to conversations
 }
+
+export interface BotConfig extends BaseAccountConfig {
+  accountType: 'bot';
+  discordBotToken: string; // Keep for backward compatibility
+}
+
+export interface UserConfig extends BaseAccountConfig {
+  accountType: 'user';
+  discordUserToken: string;
+  messageFrequency?: 'high' | 'medium' | 'low'; // Legacy - use interactionRate instead
+  messageBehavior?: 'normal' | 'aggressive' | 'passive'; // Legacy - use interactionRate instead
+}
+
+export type AccountConfig = BotConfig | UserConfig;
 
 export interface ConversationMessage {
   username: string;
