@@ -26,4 +26,12 @@ export const MAX_UNIQUE_IMAGE_FETCH_ATTEMPTS = 5; // Max attempts to find a new 
 
 // Discord file upload limits
 export const DISCORD_MAX_FILE_SIZE = 8 * 1024 * 1024; // 8MB for normal servers
-export const REDDIT_IMAGE_DOWNLOAD_TIMEOUT_MS = 10000; // 10 seconds timeout for downloading images 
+export const REDDIT_IMAGE_DOWNLOAD_TIMEOUT_MS = 10000; // 10 seconds timeout for downloading images
+
+// Response timing constants
+export const INTERACTION_TRACKING_CLEANUP_THRESHOLD = 1000; // Clean up when map exceeds this size
+export const INTERACTION_TRACKING_RETENTION_MS = 24 * 60 * 60 * 1000; // Keep data for 24 hours
+export const MAX_RESPONSE_DELAY_MS = 15 * 60 * 1000; // Cap delays at 15 minutes
+export const MIN_RESPONSE_DELAY_MS = 2000; // Minimum 2 second delay
+export const TYPING_INDICATOR_MIN_PERCENTAGE = 0.2; // Show typing at least 20% through delay
+export const TYPING_INDICATOR_MAX_PERCENTAGE = 0.6; // Show typing at most 60% through delay

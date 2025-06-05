@@ -22,6 +22,12 @@ import {
   BOT_CHAIN_INACTIVITY_RESET_MS,
   RECENTLY_SENT_IMAGE_CACHE_SIZE,
   MAX_UNIQUE_IMAGE_FETCH_ATTEMPTS,
+  INTERACTION_TRACKING_CLEANUP_THRESHOLD,
+  INTERACTION_TRACKING_RETENTION_MS,
+  MAX_RESPONSE_DELAY_MS,
+  MIN_RESPONSE_DELAY_MS,
+  TYPING_INDICATOR_MIN_PERCENTAGE,
+  TYPING_INDICATOR_MAX_PERCENTAGE,
 } from "./constants";
 
 //Bot back and forth (prevent infinite loop but allow for mentioning other bots in conversation)
@@ -44,6 +50,9 @@ const channelMessageTrackers = new Map<string, ChannelMessageTracker>();
 
 // Cache for recently sent Reddit image IDs by channel
 const recentlySentRedditImagesByChannel = new Map<string, string[]>();
+
+// Track last interaction times for realistic response delays
+const lastInteractionTimes = new Map<string, number>();
 
 // Helper function to check if the bot can respond to a channel before responding
 function shouldAllowBotMessage(message: Message): boolean {
@@ -134,6 +143,128 @@ async function canRespondToChannel(
   } catch (error) {
     console.error("Error checking permissions:", error);
     return false;
+  }
+}
+
+/**
+ * Calculates a realistic response delay based on time since last interaction
+ * @param timeSinceLastMs - Milliseconds since last interaction
+ * @param isDM - Whether this is a direct message
+ * @param isUrgent - Whether the message seems urgent (question, mention)
+ * @returns Delay in milliseconds before responding
+ */
+function calculateRealisticDelay(
+  timeSinceLastMs: number,
+  isDM: boolean = false,
+  isUrgent: boolean = false
+): number {
+  // Handle edge cases
+  const safeSinceLastMs = Math.max(0, timeSinceLastMs);
+  const minutesSinceLast = safeSinceLastMs / (60 * 1000);
+  
+  let baseDelayRange: [number, number]; // [min, max] in seconds
+  
+  if (minutesSinceLast < 1) {
+    // Active conversation - very quick responses
+    baseDelayRange = [3, 25];
+  } else if (minutesSinceLast < 10) {
+    // Recent activity - still relatively quick
+    baseDelayRange = [15, 120];
+  } else if (minutesSinceLast < 30) {
+    // Moderate gap - took a bit to notice
+    baseDelayRange = [30, 240];
+  } else if (minutesSinceLast < 120) {
+    // Longer gap - was away for a while
+    baseDelayRange = [60, 480];
+  } else {
+    // Extended gap - significant time away
+    baseDelayRange = [180, 900];
+  }
+  
+  // Adjust for DMs (generally faster response due to notifications)
+  if (isDM) {
+    baseDelayRange[0] = Math.max(2, Math.floor(baseDelayRange[0] * 0.7));
+    baseDelayRange[1] = Math.floor(baseDelayRange[1] * 0.8);
+  }
+  
+  // Adjust for urgent messages (questions, mentions)
+  if (isUrgent) {
+    baseDelayRange[0] = Math.max(2, Math.floor(baseDelayRange[0] * 0.8));
+    baseDelayRange[1] = Math.floor(baseDelayRange[1] * 0.9);
+  }
+  
+  // Add some randomization for natural feel
+  const [minDelay, maxDelay] = baseDelayRange;
+  const randomDelay = Math.floor(Math.random() * (maxDelay - minDelay + 1)) + minDelay;
+  const delayMs = randomDelay * 1000; // Convert to milliseconds
+  
+  // Apply hard limits to prevent excessive delays
+  return Math.min(Math.max(delayMs, MIN_RESPONSE_DELAY_MS), MAX_RESPONSE_DELAY_MS);
+}
+
+/**
+ * Determines when to show typing indicator during response delay
+ * @param totalDelayMs - Total delay before responding
+ * @returns Delay before showing typing indicator
+ */
+function calculateTypingDelay(totalDelayMs: number): number {
+  // Show typing indicator somewhere between configured percentage range
+  const typingPercentage = TYPING_INDICATOR_MIN_PERCENTAGE + 
+    Math.random() * (TYPING_INDICATOR_MAX_PERCENTAGE - TYPING_INDICATOR_MIN_PERCENTAGE);
+  return Math.floor(totalDelayMs * typingPercentage);
+}
+
+/**
+ * Checks if a message seems urgent based on content
+ * @param content - Message content
+ * @param isMentioned - Whether bot was mentioned
+ * @returns Whether message seems urgent
+ */
+function isMessageUrgent(content: string, isMentioned: boolean): boolean {
+  if (isMentioned) return true;
+  
+  const urgentPatterns = [
+    /\?/, // Questions
+    /help/i,
+    /urgent/i,
+    /quick/i,
+    /asap/i,
+    /emergency/i
+  ];
+  
+  return urgentPatterns.some(pattern => pattern.test(content));
+}
+
+/**
+ * Gets the interaction key for tracking last interaction times
+ * @param channelId - Channel ID
+ * @param userId - User ID
+ * @param botId - Bot ID
+ * @returns Unique key for this interaction pair
+ */
+function getInteractionKey(channelId: string, userId: string, botId: string): string {
+  return `${channelId}:${userId}:${botId}`;
+}
+
+/**
+ * Updates the last interaction time for a channel/user/bot combination
+ * @param channelId - Channel ID
+ * @param userId - User ID  
+ * @param botId - Bot ID
+ */
+function updateLastInteractionTime(channelId: string, userId: string, botId: string): void {
+  const key = getInteractionKey(channelId, userId, botId);
+  const now = Date.now();
+  lastInteractionTimes.set(key, now);
+  
+  // Clean up old interaction times periodically
+  if (lastInteractionTimes.size > INTERACTION_TRACKING_CLEANUP_THRESHOLD) {
+    const oldestAllowed = now - INTERACTION_TRACKING_RETENTION_MS;
+    for (const [interactionKey, timestamp] of lastInteractionTimes.entries()) {
+      if (timestamp < oldestAllowed) {
+        lastInteractionTimes.delete(interactionKey);
+      }
+    }
   }
 }
 
@@ -328,15 +459,44 @@ async function createDiscordClientForBot(
     // Ignore if the bot is not mentioned or referenced
     if (!isMentioned && !containsBotName) return;
 
+    let typingTimeout: NodeJS.Timeout | null = null;
+    
     try {
-      // Show typing indicator
-      if (
-        message.channel instanceof BaseGuildTextChannel ||
-        message.channel instanceof DMChannel
-      ) {
-        await message.channel.sendTyping();
+      // Calculate realistic response timing
+      const interactionKey = getInteractionKey(message.channel.id, message.author.id, botConfig.id);
+      const lastInteractionTime = lastInteractionTimes.get(interactionKey) || 0;
+      const timeSinceLastMs = Date.now() - lastInteractionTime;
+      const isUrgent = isMessageUrgent(message.content, isMentioned);
+      
+      const responseDelayMs = calculateRealisticDelay(timeSinceLastMs, false, isUrgent);
+      const typingDelayMs = calculateTypingDelay(responseDelayMs);
+      
+      console.log(`[Bot ${botConfig.id}] Realistic timing - delay: ${Math.round(responseDelayMs/1000)}s, typing in: ${Math.round(typingDelayMs/1000)}s (last interaction: ${Math.round(timeSinceLastMs/60000)}min ago)`);
+      
+      // Schedule typing indicator to show partway through delay
+      typingTimeout = setTimeout(async () => {
+        try {
+          if (
+            message.channel instanceof BaseGuildTextChannel ||
+            message.channel instanceof DMChannel
+          ) {
+            await message.channel.sendTyping();
+          }
+        } catch (typingError) {
+          // Silently handle typing errors (channel might be unavailable)
+          console.warn(`[Bot ${botConfig.id}] Typing indicator failed:`, typingError);
+        }
+      }, typingDelayMs);
+      
+      // Wait for the calculated response delay
+      await new Promise(resolve => setTimeout(resolve, responseDelayMs));
+      
+      // Clear the typing timeout (in case the delay was shorter than expected)
+      if (typingTimeout) {
+        clearTimeout(typingTimeout);
+        typingTimeout = null;
       }
-
+      
       // Fetch recent conversation with caching
       const conversationArray = await ephemeralFetchConversation(
         message.channel as TextChannel | DMChannel,
@@ -392,17 +552,29 @@ async function createDiscordClientForBot(
       ) {
         await message.channel.send(messageOptions);
       }
+      
+      // Update last interaction time after successful response
+      updateLastInteractionTime(message.channel.id, message.author.id, botConfig.id);
     } catch (error) {
       console.error(`[Bot ${botConfig.id}] Error:`, error);
       const errorMessage =
         "Beep boop, something went wrong. Please contact the Kindroid owner if this keeps up!";
-      if (isMentioned) {
-        await message.reply(errorMessage);
-      } else if (
-        message.channel instanceof BaseGuildTextChannel ||
-        message.channel instanceof DMChannel
-      ) {
-        await message.channel.send(errorMessage);
+      try {
+        if (isMentioned) {
+          await message.reply(errorMessage);
+        } else if (
+          message.channel instanceof BaseGuildTextChannel ||
+          message.channel instanceof DMChannel
+        ) {
+          await message.channel.send(errorMessage);
+        }
+      } catch (replyError) {
+        console.error(`[Bot ${botConfig.id}] Failed to send error message:`, replyError);
+      }
+    } finally {
+      // Always clear the typing timeout to prevent memory leaks
+      if (typingTimeout) {
+        clearTimeout(typingTimeout);
       }
     }
   });
@@ -459,11 +631,42 @@ async function handleDirectMessage(
     }
   }
 
+  let typingTimeout: NodeJS.Timeout | null = null;
+  
   try {
-    // Show typing indicator
-    if (message.channel instanceof DMChannel) {
-      await message.channel.sendTyping();
+    // Calculate realistic response timing for DM
+    const interactionKey = getInteractionKey(message.channel.id, message.author.id, botConfig.id);
+    const lastInteractionTime = lastInteractionTimes.get(interactionKey) || 0;
+    const timeSinceLastMs = Date.now() - lastInteractionTime;
+    const isUrgent = isMessageUrgent(message.content, true); // DMs are generally urgent
+    
+    const responseDelayMs = calculateRealisticDelay(timeSinceLastMs, true, isUrgent);
+    const typingDelayMs = calculateTypingDelay(responseDelayMs);
+    
+    console.log(`[Bot ${botConfig.id}] DM timing - delay: ${Math.round(responseDelayMs/1000)}s, typing in: ${Math.round(typingDelayMs/1000)}s (last interaction: ${Math.round(timeSinceLastMs/60000)}min ago)`);
+    
+    // Schedule typing indicator to show partway through delay
+    typingTimeout = setTimeout(async () => {
+      try {
+        if (message.channel instanceof DMChannel) {
+          await message.channel.sendTyping();
+        }
+      } catch (typingError) {
+        // Silently handle typing errors (channel might be unavailable)
+        console.warn(`[Bot ${botConfig.id}] DM typing indicator failed:`, typingError);
+      }
+    }, typingDelayMs);
+    
+    // Wait for the calculated response delay
+    await new Promise(resolve => setTimeout(resolve, responseDelayMs));
+    
+    // Clear the typing timeout (in case the delay was shorter than expected)
+    if (typingTimeout) {
+      clearTimeout(typingTimeout);
+      typingTimeout = null;
+    }
 
+    if (message.channel instanceof DMChannel) {
       // Fetch recent conversation
       const conversationArray = await ephemeralFetchConversation(
         message.channel,
@@ -512,12 +715,24 @@ async function handleDirectMessage(
 
       // Send the AI's reply
       await message.reply(messageOptions);
+      
+      // Update last interaction time after successful DM response
+      updateLastInteractionTime(message.channel.id, message.author.id, botConfig.id);
     }
   } catch (error) {
     console.error(`[Bot ${botConfig.id}] DM Error:`, error);
-    await message.reply(
-      "Beep boop, something went wrong. Please contact the Kindroid owner if this keeps up!"
-    );
+    try {
+      await message.reply(
+        "Beep boop, something went wrong. Please contact the Kindroid owner if this keeps up!"
+      );
+    } catch (replyError) {
+      console.error(`[Bot ${botConfig.id}] Failed to send DM error message:`, replyError);
+    }
+  } finally {
+    // Always clear the typing timeout to prevent memory leaks
+    if (typingTimeout) {
+      clearTimeout(typingTimeout);
+    }
   }
 }
 
@@ -570,6 +785,7 @@ async function shutdownAllBots(): Promise<void> {
   channelMessageTrackers.clear();
   recentlySentRedditImagesByChannel.clear();
   botToBotChains.clear();
+  lastInteractionTimes.clear();
 }
 
 export { initializeAllBots, shutdownAllBots };

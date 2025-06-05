@@ -80,6 +80,20 @@ The heart of the Discord integration, managing:
 - Validates image size (8MB Discord limit) and content type
 - Handles download failures gracefully
 
+**Realistic Response Timing System**:
+- Implements human-like response delays based on conversation history
+- Tracks last interaction times per channel/user/bot combination via `lastInteractionTimes` Map
+- Calculates response delays based on time since last interaction:
+  - Active conversation (0-1 min): 3-25 seconds
+  - Recent activity (1-10 min): 15 seconds - 2 minutes
+  - Moderate gap (10-30 min): 30 seconds - 4 minutes
+  - Longer gap (30 min - 2 hours): 1-8 minutes
+  - Extended gap (2+ hours): 3-15 minutes
+- Shows typing indicator partway through delay (20-60% of total delay)
+- Faster responses for DMs and urgent messages (questions, mentions)
+- Adds randomization for natural conversation feel
+- Auto-cleanup of old interaction data after 24 hours
+
 **Permission Handling**:
 - Checks ViewChannel, SendMessages, ReadMessageHistory permissions
 - Additional SendMessagesInThreads check for thread channels
@@ -228,6 +242,7 @@ REDDIT_NSFW_1=true|false                # Allow NSFW Reddit content
 - `channelMessageTrackers`: Reddit image countdown per channel
 - `recentlySentRedditImagesByChannel`: Image deduplication cache
 - `botToBotChains`: Bot conversation chain tracking
+- `lastInteractionTimes`: Response timing per channel/user/bot combination
 
 ### Cache Management
 - Message cache: 5-second duration
@@ -236,6 +251,7 @@ REDDIT_NSFW_1=true|false                # Allow NSFW Reddit content
 - Bot chain tracking: Auto-cleanup after 20 minutes inactivity
 - DM conversation counts: Auto-cleanup after 7 days inactivity
 - Channel message trackers: Auto-cleanup after 30 days
+- Last interaction times: Auto-cleanup after 24 hours
 - All caches auto-cleanup at 1000+ entries to prevent unbounded growth
 
 ## Deployment Considerations
