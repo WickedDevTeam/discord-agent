@@ -1,7 +1,7 @@
 {
   "name": "kindroid-discord",
-  "version": "1.0.1",
-  "description": "Multi-bot Discord manager for Kindroid AI personas with JIT message fetching",
+  "version": "2.0.0",
+  "description": "Multi-account Discord manager for Kindroid AI personas supporting both bots and user accounts with unified interaction system",
   "main": "dist/index.js",
   "scripts": {
     "start": "npm run build && node dist/index.js",
@@ -15,9 +15,15 @@
   "keywords": [
     "discord",
     "bot",
+    "user-account",
     "ai",
     "kindroid",
-    "multi-bot"
+    "multi-account",
+    "autonomous",
+    "interaction-rate",
+    "reddit-images",
+    "typescript",
+    "nodejs"
   ],
   "author": "",
   "license": "MIT",

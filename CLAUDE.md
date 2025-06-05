@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Kindroid Discord Multi-Account Manager is a Node.js TypeScript service that runs multiple Discord accounts (both bots and user accounts), each connected to a unique Kindroid AI persona. The system implements just-in-time message fetching for conversation context and supports optional Reddit image attachments based on configurable message intervals. User accounts provide more natural, flexible interactions compared to traditional bot accounts.
+Kindroid Discord Multi-Account Manager is a Node.js TypeScript service that runs multiple Discord accounts (both bots and user accounts), each connected to a unique Kindroid AI persona. The system features a unified interaction rate system (1-100) that enables intelligent autonomous responses, implements just-in-time message fetching for conversation context, and supports optional Reddit image attachments. User accounts provide more natural, flexible interactions while maintaining identical functionality to bot accounts.
 
 ## Development Commands
 
