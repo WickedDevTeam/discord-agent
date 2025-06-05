@@ -12,6 +12,7 @@ A Node.js service that manages multiple Discord bots, each tied to a unique Kind
 - **Caching**: Minimizes redundant Discord API calls
 - **Graceful shutdown**: Bots disconnect on SIGINT/SIGTERM
 - **Configurable NSFW filtering** via environment variables
+- **Reddit image attachments**: Bots can randomly attach images from specified subreddits
 
 ## Prerequisites
 
@@ -65,6 +66,26 @@ Use environment variables to configure your bots. The .env.example file shows us
 - SHARED_AI_CODE_n: The share code to identify which AI persona to use for the n-th bot
 - BOT_TOKEN_n: Discord bot token for the n-th bot
 - ENABLE_FILTER_n: (Optional) true or false to enable NSFW filtering for the n-th bot
+
+### Reddit Image Feature (Optional)
+
+Each bot can be configured to randomly attach images from Reddit:
+
+- REDDIT_SUBREDDITS_n: Comma-separated list of subreddits (e.g., "aww,EarthPorn,Art")
+- REDDIT_MIN_MESSAGES_n: Minimum messages before attaching an image (e.g., 5)
+- REDDIT_MAX_MESSAGES_n: Maximum messages before attaching an image (e.g., 10)
+- REDDIT_NSFW_n: (Optional) true or false to allow NSFW content (default: false)
+
+Example configuration:
+```env
+# Reddit configuration for Bot 1
+REDDIT_SUBREDDITS_1=aww,EarthPorn,FoodPorn,Art
+REDDIT_MIN_MESSAGES_1=5
+REDDIT_MAX_MESSAGES_1=10
+REDDIT_NSFW_1=false
+```
+
+The bot will randomly attach an image after a random number of messages between the min and max values. Images are fetched from the specified subreddits and embedded in the Discord message.
 
 You can create as many bots as you want by incrementing the number (\_1, \_2, \_3, etc.).
 

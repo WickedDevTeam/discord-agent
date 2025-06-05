@@ -1,0 +1,20 @@
+# Reddit Image Feature Configuration Example
+# Add these lines to your .env file to enable Reddit image attachments
+
+# For Bot 1
+REDDIT_SUBREDDITS_1=aww,EarthPorn,FoodPorn,Art,pics
+REDDIT_MIN_MESSAGES_1=5
+REDDIT_MAX_MESSAGES_1=10
+REDDIT_NSFW_1=false
+
+# For Bot 2 (if you have multiple bots)
+REDDIT_SUBREDDITS_2=memes,funny,comics,wholesomememes
+REDDIT_MIN_MESSAGES_2=3
+REDDIT_MAX_MESSAGES_2=8
+REDDIT_NSFW_2=false
+
+# Notes:
+# - Subreddits should be comma-separated without the r/ prefix
+# - Min/max messages determine how often images are posted
+# - NSFW setting controls whether adult content is allowed
+# - Invalid subreddits will be automatically filtered out during startup 

@@ -1,6 +1,6 @@
 import dotenv from "dotenv";
 import { initializeAllBots, shutdownAllBots } from "./discordManager";
-import { BotConfig } from "./types";
+import { BotConfig, RedditImageConfig } from "./types";
 
 dotenv.config();
 
@@ -28,11 +28,39 @@ function loadBotConfigs(): BotConfig[] {
     const enableFilter =
       process.env[`ENABLE_FILTER_${currentIndex}`]?.toLowerCase() === "true";
 
+    // Get Reddit configuration if available
+    let redditConfig: RedditImageConfig | undefined;
+    const redditSubreddits = process.env[`REDDIT_SUBREDDITS_${currentIndex}`];
+    const redditMinMessages = process.env[`REDDIT_MIN_MESSAGES_${currentIndex}`];
+    const redditMaxMessages = process.env[`REDDIT_MAX_MESSAGES_${currentIndex}`];
+    const redditNSFW = process.env[`REDDIT_NSFW_${currentIndex}`]?.toLowerCase() === "true";
+
+    if (redditSubreddits && redditMinMessages && redditMaxMessages) {
+      const minMessages = parseInt(redditMinMessages, 10);
+      const maxMessages = parseInt(redditMaxMessages, 10);
+      
+      // Validate parsed numbers
+      if (!isNaN(minMessages) && !isNaN(maxMessages)) {
+        redditConfig = {
+          subreddits: redditSubreddits.split(",").map((s) => s.trim()).filter((s) => s.length > 0),
+          minMessages: Math.max(1, minMessages), // Ensure at least 1
+          maxMessages: Math.max(minMessages, maxMessages), // Ensure max >= min
+          nsfw: redditNSFW || false,
+        };
+        
+        // Log configuration
+        console.log(`[Bot ${currentIndex}] Reddit config: ${redditConfig.subreddits.length} subreddits, ${redditConfig.minMessages}-${redditConfig.maxMessages} messages, NSFW: ${redditConfig.nsfw}`);
+      } else {
+        console.warn(`[Bot ${currentIndex}] Invalid Reddit message counts, skipping Reddit feature`);
+      }
+    }
+
     configs.push({
       id: `bot${currentIndex}`,
       discordBotToken: botToken,
       sharedAiCode,
       enableFilter,
+      redditConfig,
     });
 
     currentIndex++;

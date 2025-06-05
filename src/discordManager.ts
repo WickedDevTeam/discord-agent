@@ -8,10 +8,23 @@ import {
   BaseGuildTextChannel,
   PermissionFlagsBits,
   Partials,
+  EmbedBuilder,
+  MessageCreateOptions,
 } from "discord.js";
 import { ephemeralFetchConversation } from "./messageFetch";
 import { callKindroidAI } from "./kindroidAPI";
-import { BotConfig, DMConversationCount } from "./types";
+import { BotConfig, DMConversationCount, ChannelMessageTracker } from "./types";
+import { getRandomRedditImage, validateSubreddits } from "./redditAPI";
+import {
+  DISCORD_EMBED_TITLE_MAX_LENGTH,
+  DISCORD_EMBED_COLOR_REDDIT,
+  CHANNEL_CACHE_DURATION_MS,
+  DM_FETCH_LIMIT,
+  MAX_BOT_CHAIN,
+  BOT_CHAIN_INACTIVITY_RESET_MS,
+  RECENTLY_SENT_IMAGE_CACHE_SIZE,
+  MAX_UNIQUE_IMAGE_FETCH_ATTEMPTS,
+} from "./constants";
 
 //Bot back and forth (prevent infinite loop but allow for mentioning other bots in conversation)
 type BotConversationChain = {
@@ -27,6 +40,12 @@ const activeBots = new Map<string, Client>();
 
 // Track DM conversation counts with proper typing
 const dmConversationCounts = new Map<string, DMConversationCount>();
+
+// Track message counts for Reddit image feature
+const channelMessageTrackers = new Map<string, ChannelMessageTracker>();
+
+// Cache for recently sent Reddit image IDs by channel
+const recentlySentRedditImagesByChannel = new Map<string, string[]>();
 
 // Helper function to check if the bot can respond to a channel before responding
 function shouldAllowBotMessage(message: Message): boolean {
@@ -47,12 +66,8 @@ function shouldAllowBotMessage(message: Message): boolean {
   const now = Date.now();
   const timeSinceLast = now - chainData.lastActivity;
 
-  // Example threshold settings
-  const MAX_BOT_CHAIN = 3; // max back-and-forth between bots
-  const INACTIVITY_RESET = 600_000; // reset chain after 10 min
-
   // If too much time passed, reset the chain
-  if (timeSinceLast > INACTIVITY_RESET) {
+  if (timeSinceLast > BOT_CHAIN_INACTIVITY_RESET_MS) {
     chainData.chainCount = 0;
     chainData.lastBotId = "";
   }
@@ -114,12 +129,127 @@ async function canRespondToChannel(
 }
 
 /**
+ * Checks if a Reddit image should be attached based on message count
+ * @param channelId - The channel ID
+ * @param botConfig - The bot configuration
+ * @returns Whether to attach an image
+ */
+function shouldAttachRedditImage(
+  channelId: string,
+  botConfig: BotConfig
+): boolean {
+  if (!botConfig.redditConfig || botConfig.redditConfig.subreddits.length === 0) {
+    return false;
+  }
+
+  const tracker = channelMessageTrackers.get(channelId);
+  if (!tracker) {
+    // Initialize tracker for new channel
+    const targetCount = Math.floor(
+      Math.random() * (botConfig.redditConfig.maxMessages - botConfig.redditConfig.minMessages + 1) +
+      botConfig.redditConfig.minMessages
+    );
+    channelMessageTrackers.set(channelId, {
+      messageCount: 1,
+      targetMessageCount: targetCount,
+      lastImageTime: 0,
+    });
+    return false;
+  }
+
+  // Increment message count
+  tracker.messageCount++;
+
+  // Check if we've reached the target
+  if (tracker.messageCount >= tracker.targetMessageCount) {
+    // Reset counter with new random target
+    tracker.messageCount = 0;
+    tracker.targetMessageCount = Math.floor(
+      Math.random() * (botConfig.redditConfig.maxMessages - botConfig.redditConfig.minMessages + 1) +
+      botConfig.redditConfig.minMessages
+    );
+    tracker.lastImageTime = Date.now();
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Fetches a random Reddit image that hasn't been recently sent in the channel.
+ * @param botConfig Configuration for this bot instance
+ * @param channelId The ID of the channel where the image will be sent
+ * @returns An image object or null if no suitable image is found.
+ */
+async function getUnseenRandomRedditImage(
+  botConfig: BotConfig,
+  channelId: string
+): Promise<{ id: string; url: string; title: string; subreddit: string } | null> {
+  if (!botConfig.redditConfig || botConfig.redditConfig.subreddits.length === 0) {
+    return null; // No Reddit config or no subreddits
+  }
+
+  const recentlySentIds = recentlySentRedditImagesByChannel.get(channelId) || [];
+
+  for (let attempt = 0; attempt < MAX_UNIQUE_IMAGE_FETCH_ATTEMPTS; attempt++) {
+    const image = await getRandomRedditImage(botConfig.redditConfig);
+
+    if (!image) {
+      // getRandomRedditImage itself failed to find anything (e.g., all subreddits failed)
+      // No need to log here as getRandomRedditImage already logs its failures.
+      if (attempt === 0) console.log(`[Bot ${botConfig.id}] Initial image fetch failed for channel ${channelId}.`);
+      continue; // Try fetching again
+    }
+
+    if (!recentlySentIds.includes(image.id)) {
+      // Found an image not in the recently sent list for this channel
+      const updatedSentIds = [image.id, ...recentlySentIds].slice(0, RECENTLY_SENT_IMAGE_CACHE_SIZE);
+      recentlySentRedditImagesByChannel.set(channelId, updatedSentIds);
+      console.log(`[Bot ${botConfig.id}] Found new image ${image.id} for channel ${channelId}. Cache updated.`);
+      return image;
+    }
+
+    console.log(`[Bot ${botConfig.id}] Image ${image.id} (r/${image.subreddit}) was recently sent in channel ${channelId}. Attempt ${attempt + 1}/${MAX_UNIQUE_IMAGE_FETCH_ATTEMPTS}.`);
+  }
+
+  // If all attempts result in recently sent images or failures, try one last time.
+  // If this last one is still a repeat, send it anyway to prioritize sending *something*.
+  // If this last fetch fails, then send nothing.
+  console.log(`[Bot ${botConfig.id}] Could not find a unique image for channel ${channelId} after ${MAX_UNIQUE_IMAGE_FETCH_ATTEMPTS} attempts. Fetching one last time.`);
+  const lastAttemptImage = await getRandomRedditImage(botConfig.redditConfig);
+
+  if (lastAttemptImage) {
+    const updatedSentIds = [lastAttemptImage.id, ...recentlySentIds].slice(0, RECENTLY_SENT_IMAGE_CACHE_SIZE);
+    recentlySentRedditImagesByChannel.set(channelId, updatedSentIds);
+    console.log(`[Bot ${botConfig.id}] Using last-attempt image ${lastAttemptImage.id} for channel ${channelId}. Cache updated.`);
+    return lastAttemptImage;
+  }
+  
+  console.log(`[Bot ${botConfig.id}] All attempts to fetch an image (unique or not) failed for channel ${channelId}. No image will be sent.`);
+  return null;
+}
+
+/**
  * Creates and initializes a Discord client for a specific bot configuration
  * @param botConfig - Configuration for this bot instance
  */
 async function createDiscordClientForBot(
   botConfig: BotConfig
 ): Promise<Client> {
+  // Validate Reddit subreddits if configured
+  if (botConfig.redditConfig && botConfig.redditConfig.subreddits.length > 0) {
+    console.log(`[Bot ${botConfig.id}] Validating Reddit subreddits...`);
+    const validSubreddits = await validateSubreddits(botConfig.redditConfig.subreddits);
+    
+    if (validSubreddits.length === 0) {
+      console.warn(`[Bot ${botConfig.id}] No valid subreddits found. Reddit image feature disabled.`);
+      botConfig.redditConfig.subreddits = [];
+    } else {
+      botConfig.redditConfig.subreddits = validSubreddits;
+      console.log(`[Bot ${botConfig.id}] Valid subreddits: ${validSubreddits.join(", ")}`);
+    }
+  }
+
   const client = new Client({
     intents: [
       GatewayIntentBits.Guilds,
@@ -187,8 +317,8 @@ async function createDiscordClientForBot(
       // Fetch recent conversation with caching
       const conversationArray = await ephemeralFetchConversation(
         message.channel as TextChannel | DMChannel,
-        30, // last 30 messages
-        5000 // 5 second cache
+        DM_FETCH_LIMIT,
+        CHANNEL_CACHE_DURATION_MS
       );
 
       // Call Kindroid AI with the conversation context
@@ -203,14 +333,43 @@ async function createDiscordClientForBot(
         return;
       }
 
+      // Check if we should attach a Reddit image
+      const shouldAttachImage = shouldAttachRedditImage(message.channel.id, botConfig);
+      let imageEmbed: EmbedBuilder | null = null;
+
+      if (shouldAttachImage && botConfig.redditConfig) {
+        console.log(`[Bot ${botConfig.id}] Fetching Reddit image...`);
+        const redditImage = await getUnseenRandomRedditImage(botConfig, message.channel.id);
+        
+        if (redditImage) {
+          // Create an embed with the image
+          imageEmbed = new EmbedBuilder()
+            .setTitle(redditImage.title.length > DISCORD_EMBED_TITLE_MAX_LENGTH ? 
+              redditImage.title.substring(0, DISCORD_EMBED_TITLE_MAX_LENGTH - 3) + "..." : 
+              redditImage.title)
+            .setImage(redditImage.url)
+            .setFooter({ text: `r/${redditImage.subreddit}` })
+            .setColor(DISCORD_EMBED_COLOR_REDDIT);
+        }
+      }
+
+      // Prepare the message options
+      const messageOptions: MessageCreateOptions = {
+        content: aiResult.reply,
+      };
+
+      if (imageEmbed) {
+        messageOptions.embeds = [imageEmbed];
+      }
+
       // If it was a mention, reply to the message. Otherwise, send as normal message
       if (isMentioned) {
-        await message.reply(aiResult.reply);
+        await message.reply(messageOptions);
       } else if (
         message.channel instanceof BaseGuildTextChannel ||
         message.channel instanceof DMChannel
       ) {
-        await message.channel.send(aiResult.reply);
+        await message.channel.send(messageOptions);
       }
     } catch (error) {
       console.error(`[Bot ${botConfig.id}] Error:`, error);
@@ -276,8 +435,8 @@ async function handleDirectMessage(
       // Fetch recent conversation
       const conversationArray = await ephemeralFetchConversation(
         message.channel,
-        30,
-        5000
+        DM_FETCH_LIMIT,
+        CHANNEL_CACHE_DURATION_MS
       );
 
       // Call Kindroid AI
@@ -292,8 +451,37 @@ async function handleDirectMessage(
         return;
       }
 
+      // Check if we should attach a Reddit image
+      const shouldAttachImage = shouldAttachRedditImage(message.channel.id, botConfig);
+      let imageEmbed: EmbedBuilder | null = null;
+
+      if (shouldAttachImage && botConfig.redditConfig) {
+        console.log(`[Bot ${botConfig.id}] Fetching Reddit image for DM...`);
+        const redditImage = await getUnseenRandomRedditImage(botConfig, message.channel.id);
+        
+        if (redditImage) {
+          // Create an embed with the image
+          imageEmbed = new EmbedBuilder()
+            .setTitle(redditImage.title.length > DISCORD_EMBED_TITLE_MAX_LENGTH ? 
+              redditImage.title.substring(0, DISCORD_EMBED_TITLE_MAX_LENGTH - 3) + "..." : 
+              redditImage.title)
+            .setImage(redditImage.url)
+            .setFooter({ text: `r/${redditImage.subreddit}` })
+            .setColor(DISCORD_EMBED_COLOR_REDDIT);
+        }
+      }
+
+      // Prepare the message options
+      const messageOptions: MessageCreateOptions = {
+        content: aiResult.reply,
+      };
+
+      if (imageEmbed) {
+        messageOptions.embeds = [imageEmbed];
+      }
+
       // Send the AI's reply
-      await message.reply(aiResult.reply);
+      await message.reply(messageOptions);
     }
   } catch (error) {
     console.error(`[Bot ${botConfig.id}] DM Error:`, error);
@@ -349,6 +537,8 @@ async function shutdownAllBots(): Promise<void> {
   await Promise.all(shutdownPromises);
   activeBots.clear();
   dmConversationCounts.clear();
+  channelMessageTrackers.clear();
+  recentlySentRedditImagesByChannel.clear();
 }
 
 export { initializeAllBots, shutdownAllBots };
